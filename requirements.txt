@@ -2,3 +2,5 @@ aiogram
 python-dotenv
 fastapi
 gunicorn
+fastapi
+uvicorn
