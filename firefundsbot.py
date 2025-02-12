@@ -1,6 +1,7 @@
 import re
 import json
 import math
+from fastapi import FastAPI
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -11,8 +12,24 @@ import os
 
 # Инициализация бота
 API_TOKEN = os.getenv("API_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
+app = FastAPI()
+
+# Устанавливаем Webhook
+@app.on_event("startup")
+async def on_startup():
+    await bot.set_webhook(WEBHOOK_URL)
+
+# Обрабатываем входящие обновления
+@app.post("/")
+async def handle_update(update: dict):
+    telegram_update = Update.model_validate(update)
+    await dp.feed_update(bot, telegram_update)
+    
 # Файл для хранения chat_id пользователей
 CHAT_ID_FILE = "chat_ids.json"
 
