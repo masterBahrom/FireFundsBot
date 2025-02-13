@@ -21,9 +21,9 @@ dp = Dispatcher()
 app = FastAPI()
 
 # Устанавливаем Webhook
-@app.on_event("startup")
-async def on_startup():
-    await bot.set_webhook(WEBHOOK_URL)
+#@app.on_event("startup")
+#async def on_startup():
+   # await bot.set_webhook(WEBHOOK_URL)
 
 # Обрабатываем входящие обновления
 @app.post("/")
