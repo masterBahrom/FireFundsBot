@@ -132,9 +132,8 @@ async def main():
     """Запускает бота и сервер для пинга."""
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 10000)
-    await site.start()
-
+    port = int(os.environ.get("PORT", 10000))  # Используем порт из Render
+    site = web.TCPSite(runner, "0.0.0.0", port)await site.start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
