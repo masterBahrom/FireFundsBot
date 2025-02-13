@@ -9,6 +9,7 @@ from aiogram.utils.markdown import hbold
 from aiogram import F
 import asyncio
 import os
+from aiohttp import web
 
 # Инициализация бота
 API_TOKEN = os.getenv("API_TOKEN")
@@ -121,8 +122,19 @@ async def handle_text(message: Message):
     payments = calculate_payments(activities, participants)
     await send_payment_info(message, payments)
 
+async def handle(request):
+    return web.Response(text="I'm alive!")
+
+app = web.Application()
+app.router.add_get("/", handle)
+
 async def main():
-    """Запускает бота."""
+    """Запускает бота и сервер для пинга."""
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
