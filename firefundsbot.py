@@ -1,54 +1,46 @@
 import re
 import json
 import math
-from fastapi import FastAPI
+import os
+import asyncio
+import uvicorn
+from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, Update
 from aiogram.utils.markdown import hbold
 from aiogram import F
-import asyncio
-import os
 from aiohttp import web
 
-# Инициализация бота
+# Инициализация бота и диспетчера
 API_TOKEN = os.getenv("API_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Пример: "https://your-app.onrender.com"
+WEBHOOK_PATH = "/webhook"
+PORT = int(os.getenv("PORT", 8080))
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
-app = FastAPI()
 
-# Устанавливаем Webhook
-#@app.on_event("startup")
-#async def on_startup():
-   # await bot.set_webhook(WEBHOOK_URL)
-
-# Обрабатываем входящие обновления
-@app.post("/")
-async def handle_update(update: dict):
-    telegram_update = Update.model_validate(update)
-    await dp.feed_update(bot, telegram_update)
-    
 # Файл для хранения chat_id пользователей
 CHAT_ID_FILE = "chat_ids.json"
 
-# Загружает chat_id пользователей из файла.
+# Функция для загрузки chat_id пользователей из файла.
 def load_chat_ids():
     try:
         with open(CHAT_ID_FILE, "r") as file:
             return json.load(file)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
-# Сохраняет chat_id пользователя в файл.
+
+# Функция для сохранения chat_id пользователя в файл.
 def save_chat_id(username, chat_id):
     data = load_chat_ids()
-    data[f"@{username}"] = chat_id  
+    data[f"@{username}"] = chat_id  # Добавляем знак @ перед username
     with open(CHAT_ID_FILE, "w") as file:
         json.dump(data, file)
-      
-#  Обрабатывает входной текст, выделяя активности и участников.
+
+# Функция для обработки входного текста, выделяя активности и участников.
+# Ожидается формат: "За что - Стоимость - Кто оплатил - За кого оплатил"
 def process_text(message_text):
     activities = []
     participants = []
@@ -57,10 +49,9 @@ def process_text(message_text):
     activities_text = parts[0].strip()
     participants_text = parts[1].strip() if len(parts) > 1 else ""
     
-    # Разбиваем активности построчно
+    # Обработка строк активностей
     activity_lines = activities_text.splitlines()
     for line in activity_lines:
-        # Регулярное выражение для 4-х полей
         match = re.match(r"([A-Za-zА-Яа-яЁё\s]+)\s*-\s*(\d+)\s*-\s*(@\w+)\s*-\s*(.+)", line)
         if match:
             activity_name = match.group(1).strip()
@@ -74,19 +65,17 @@ def process_text(message_text):
                 "for_whom": for_whom
             })
     
-    # Разбиваем список участников построчно
     participants = participants_text.splitlines()
     return activities, participants
 
 # Функция для расчета платежей.
 # Алгоритм:
-# 1. Для каждого участника вычисляем, какая сумма ожидается к оплате:
-#    - Если активность для "all", то стоимость делится поровну между всеми участниками.
-#    - Если указано конкретное имя (например, "@polyauspenska"), то эта сумма добавляется только для указанного участника.
-# 2. Отдельно суммируем, сколько каждый участник оплатил (payer).
-# 3. Баланс = (оплачено) - (ожидаемая сумма). Если баланс положительный – участник переплатил, иначе – недоплатил.
+# 1. Для каждой активности: 
+#    - Если "for_whom" равен "all", стоимость делится поровну между всеми участниками.
+#    - Иначе, сумма начисляется только тому участнику, чей username указан.
+# 2. Отдельно суммируется, сколько каждый участник оплатил.
+# 3. Баланс = (оплачено) - (ожидаемая сумма).
 def calculate_payments(activities, participants):
-    # Инициализируем словари для ожидаемой суммы и фактических платежей.
     expected = {participant: 0 for participant in participants}
     paid = {participant: 0 for participant in participants}
     
@@ -99,21 +88,15 @@ def calculate_payments(activities, participants):
             for participant in participants:
                 expected[participant] += share
         else:
-            # Добавляем сумму только тому, для кого предназначена оплата.
-            # Сравниваем в нижнем регистре для надежности.
             for participant in participants:
                 if participant.lower() == target:
                     expected[participant] += amount
-        # Учитываем, сколько заплатил payer.
         if payer in paid:
             paid[payer] += amount
     
-    # Рассчитываем баланс: разница между тем, сколько заплатил, и ожидаемой суммой.
     payments = {}
     for participant in participants:
         balance = paid[participant] - expected[participant]
-        # Если баланс положительный – участник переплатил (ему должны вернуть деньги),
-        # если отрицательный – он должен доплатить.
         payments[participant] = balance
     return payments
 
@@ -132,15 +115,14 @@ async def send_payment_info(message: Message, payments):
             await bot.send_message(chat_ids[participant], text)
         else:
             await message.answer(f"Не найден chat_id для {participant}, сообщение не отправлено.")
-        
         await message.answer(text)
 
-# Обрабатывает команду /start.
+# Обработчик команды /start.
 @dp.message(Command("start"))
 async def start(message: Message):
     await message.answer("Отправьте текст с активностями и участниками для расчёта.")
 
-# Регистрирует пользователя и сохраняет его chat_id.
+# Обработчик команды /me для регистрации пользователя.
 @dp.message(Command("me"))
 async def register_user(message: Message):
     save_chat_id(message.from_user.username, message.chat.id)
@@ -149,8 +131,8 @@ async def register_user(message: Message):
         "ЭТО ШУТКА!\n\n"
         "Мы просто записали ваш логин и номер этого чата, чтобы понимать кому и куда отправлять сообщение ☺️"
     )
-  
-# Обрабатывает текстовые сообщения и рассчитывает платежи.
+
+# Обработчик текстовых сообщений для расчёта платежей.
 @dp.message()
 async def handle_text(message: Message):
     text = message.text
@@ -158,20 +140,34 @@ async def handle_text(message: Message):
     payments = calculate_payments(activities, participants)
     await send_payment_info(message, payments)
 
-async def handle(request):
-    return web.Response(text="I'm alive!")
+# FastAPI приложение для обработки вебхуков.
+app = FastAPI()
 
-app = web.Application()
-app.router.add_get("/", handle)
+@app.get("/")
+async def root():
+    return {"message": "I'm alive!"}
 
-async def main():
-    """Запускает бота и сервер для пинга."""
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))  # Используем порт из Render
-    site = web.TCPSite(runner, "0.0.0.0", port)await site.start()
-    await dp.start_polling(bot)
+# Эндпоинт для получения обновлений от Telegram.
+@app.post(WEBHOOK_PATH)
+async def webhook_handler(request: Request):
+    update_data = await request.json()
+    update = Update.model_validate(update_data)
+    # Обрабатываем обновление асинхронно.
+    asyncio.create_task(dp.feed_update(bot, update))
+    return {"ok": True}
+
+# При запуске приложения устанавливаем вебхук.
+@app.on_event("startup")
+async def on_startup():
+    webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+    await bot.delete_webhook()
+    await bot.set_webhook(webhook_url)
+    print(f"Webhook установлен: {webhook_url}")
+
+# При завершении работы удаляем вебхук.
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot.delete_webhook()
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, log_level="info")
