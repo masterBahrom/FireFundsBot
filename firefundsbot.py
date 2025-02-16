@@ -53,50 +53,86 @@ def process_text(message_text):
     activities = []
     participants = []
     
-    parts = message_text.split('Участники:')
+    parts = message_text.split("Участники:")
     activities_text = parts[0].strip()
     participants_text = parts[1].strip() if len(parts) > 1 else ""
     
+    # Разбиваем активности построчно
     activity_lines = activities_text.splitlines()
     for line in activity_lines:
-        match = re.match(r'([A-Za-zА-Яа-яЁё\s]+) - (\d+) - (@\w+)', line)
+        # Регулярное выражение для 4-х полей
+        match = re.match(r"([A-Za-zА-Яа-яЁё\s]+)\s*-\s*(\d+)\s*-\s*(@\w+)\s*-\s*(.+)", line)
         if match:
             activity_name = match.group(1).strip()
             amount = int(match.group(2))
             payer = match.group(3).strip()
-            activities.append({"name": activity_name, "amount": amount, "payer": payer})
+            for_whom = match.group(4).strip().lower()  # Приводим к нижнему регистру для сравнения
+            activities.append({
+                "name": activity_name,
+                "amount": amount,
+                "payer": payer,
+                "for_whom": for_whom
+            })
     
+    # Разбиваем список участников построчно
     participants = participants_text.splitlines()
     return activities, participants
-  
-#Рассчитывает, сколько должен или кому должны участники.
+
+# Функция для расчета платежей.
+# Алгоритм:
+# 1. Для каждого участника вычисляем, какая сумма ожидается к оплате:
+#    - Если активность для "all", то стоимость делится поровну между всеми участниками.
+#    - Если указано конкретное имя (например, "@polyauspenska"), то эта сумма добавляется только для указанного участника.
+# 2. Отдельно суммируем, сколько каждый участник оплатил (payer).
+# 3. Баланс = (оплачено) - (ожидаемая сумма). Если баланс положительный – участник переплатил, иначе – недоплатил.
 def calculate_payments(activities, participants):
-    total_sum = sum([activity['amount'] for activity in activities])
-    num_participants = len(participants)
-    share_per_participant = math.floor(total_sum / num_participants)
+    # Инициализируем словари для ожидаемой суммы и фактических платежей.
+    expected = {participant: 0 for participant in participants}
+    paid = {participant: 0 for participant in participants}
     
+    for activity in activities:
+        amount = activity["amount"]
+        payer = activity["payer"]
+        target = activity["for_whom"]  # уже в нижнем регистре
+        if target == "all":
+            share = math.floor(amount / len(participants))
+            for participant in participants:
+                expected[participant] += share
+        else:
+            # Добавляем сумму только тому, для кого предназначена оплата.
+            # Сравниваем в нижнем регистре для надежности.
+            for participant in participants:
+                if participant.lower() == target:
+                    expected[participant] += amount
+        # Учитываем, сколько заплатил payer.
+        if payer in paid:
+            paid[payer] += amount
+    
+    # Рассчитываем баланс: разница между тем, сколько заплатил, и ожидаемой суммой.
     payments = {}
     for participant in participants:
-        total_paid = sum([activity['amount'] for activity in activities if activity['payer'] == participant])
-        balance = total_paid - share_per_participant
-        payments[participant] = -balance
-    
+        balance = paid[participant] - expected[participant]
+        # Если баланс положительный – участник переплатил (ему должны вернуть деньги),
+        # если отрицательный – он должен доплатить.
+        payments[participant] = balance
     return payments
 
-# Отправляет пользователям информацию об их задолженностях.
+# Функция для отправки информации об оплатах пользователям.
 async def send_payment_info(message: Message, payments):
     chat_ids = load_chat_ids()
-    for participant, amount in payments.items():
-        if amount > 0:
-            text = f"{participant}, вы должны оплатить: {amount}\nПеревести можете по ссылке - https://cpay.me/971547437161?amount={amount} или на банковский счет - https://t.me/c/2053760794/1/3164"
+    for participant, balance in payments.items():
+        if balance > 0:
+            text = f"{participant}, вам должны вернуть: {balance}\nЗапрашивайте у @master_bahrom"
         else:
-            text = f"{participant}, вам должны вернуть: {-amount}\nЗапрашивайте у @master_bahrom"
+            text = f"{participant}, вы должны оплатить: {-balance}\nПеревести можете по ссылке - https://cpay.me/971547437161?amount={-balance}"
         
+        # Логирование отправки
         if participant in chat_ids:
+            await message.answer(f"Отправляю сообщение {participant} в чат {chat_ids[participant]}: {text}")
             await bot.send_message(chat_ids[participant], text)
         else:
             await message.answer(f"Не найден chat_id для {participant}, сообщение не отправлено.")
-
+        
         await message.answer(text)
 
 # Обрабатывает команду /start.
