@@ -107,7 +107,7 @@ async def send_payment_info(message: Message, payments):
         if balance > 0:
             text = f"{participant}, вам должны вернуть: {balance}\nЗапрашивайте у @master_bahrom"
         else:
-            text = f"{participant}, вы должны оплатить: {-balance}\nПеревести можете по ссылке - https://cpay.me/971547437161?amount={-balance}"
+            text = f"Это были супер активности! Очень рад, что вы смогли к нам присоединиться\n{participant}, стоимость твоей активности составляет: {-balance}\nПеревести можете по ссылке - https://cpay.me/971547437161?amount={-balance}"
         
         # Логирование отправки
         if participant in chat_ids:
